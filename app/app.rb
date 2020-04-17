@@ -2,6 +2,7 @@ require 'sinatra/base'
 require 'sinatra/json'
 require 'json'
 require 'sinatra/config_file'
+require 'fileutils'
 
 require 'kafka'
 require 'avro_turf/messaging'
@@ -16,6 +17,8 @@ class App < Sinatra::Application
 
   register Sinatra::ConfigFile
   config_file '../config/settings.yml'
+
+  FileUtils.mkdir_p(settings.schemas_dir_path)
 
   logger = Logger.new(STDOUT)
 
