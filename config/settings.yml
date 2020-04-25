@@ -1,4 +1,3 @@
 broker_host: 'localhost:9092'
 client_id: 'kaffi'
 schema_registry_host: 'http://0.0.0.0:8081'
-schemas_dir_path: 'schemas/'

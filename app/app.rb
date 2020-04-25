@@ -36,7 +36,7 @@ class App < Sinatra::Application
   logger = Logger.new(STDOUT)
 
   kafka = Kafka.new([settings.broker_host], client_id: settings.client_id)
-  avro = AvroTurf::Messaging.new(registry_url: settings.schema_registry_host, schemas_path: settings.schemas_dir_path)
+  avro = AvroTurf::Messaging.new(registry_url: settings.schema_registry_host)
   schema_registry = AvroTurf::ConfluentSchemaRegistry.new(settings.schema_registry_host)
 
   get '/schema' do
@@ -79,7 +79,7 @@ class App < Sinatra::Application
       payload = avro.encode(JSON.parse(record.value), schema_id: record.schema_id)
       response = kafka.deliver_message(payload, topic: record.topic, key: record.key)
 
-      json({ response: response })
+      json({ response: record.attributes })
     end
   end
 end
