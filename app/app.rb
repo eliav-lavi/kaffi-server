@@ -6,11 +6,12 @@ require 'fileutils'
 
 require 'kafka'
 require 'avro_turf/messaging'
+require 'avro_turf/confluent_schema_registry'
 
 require_relative 'models/schema'
-require_relative 'models/message'
-
-require_relative 'db/table'
+require_relative 'models/subject_version'
+require_relative 'models/registered_schema'
+require_relative 'models/record'
 
 class App < Sinatra::Application
   configure :production, :development do
@@ -32,17 +33,16 @@ class App < Sinatra::Application
   register Sinatra::ConfigFile
   config_file '../config/settings.yml'
 
-  FileUtils.mkdir_p(settings.schemas_dir_path)
-
   logger = Logger.new(STDOUT)
 
   kafka = Kafka.new([settings.broker_host], client_id: settings.client_id)
-  avro = AvroTurf::Messaging.new(registry_url: settings.schema_registry_host, schemas_path: settings.schemas_dir_path)
-
-  schemas_table = Db::Table.new(name: :schemas, logger: logger, indexes: [:name])
+  avro = AvroTurf::Messaging.new(registry_url: settings.schema_registry_host)
+  schema_registry = AvroTurf::ConfluentSchemaRegistry.new(settings.schema_registry_host)
 
   get '/schema' do
-    json({ response: schemas_table.all.map(&:attributes) })
+    subjects = schema_registry.subjects
+    schemas = subjects.map { |subject| Models::SubjectVersion.new(schema_registry.subject_version(subject)) }
+    json({ response: schemas.map(&:attributes) })
   rescue StandardError => e
     status 400
     json({ response: "could not handle request to get all schemas: #{e.message}" })
@@ -51,15 +51,16 @@ class App < Sinatra::Application
   post '/schema' do
     begin
       request_body = JSON.parse(request.body.read)
-      schema = Models::Schema.build_from(raw_model: request_body)
+      schema = Models::Schema.new(request_body)
     rescue StandardError => e
       status 400
       json({ response: "could not process request. error: #{e}" })
     else
       begin  
-        schemas_table.insert(record: schema)
-        open("#{settings.schemas_dir_path}/#{schema.name}.avsc", 'w') { |f| f.puts schema.content }
-        json({ response: schema.attributes })
+        registered_schema_id = schema_registry.register(schema.subject, schema.schema)
+        registered_schema = Models::RegisteredSchema.build_from(schema: schema, id: registered_schema_id)
+        
+        json({ response: registered_schema.attributes })
       rescue StandardError => e
         status 500
         json({ response: "could not process request. error: #{e}" })
@@ -67,42 +68,18 @@ class App < Sinatra::Application
     end
   end
 
-  delete '/schema/:id' do
-    begin
-      id = params['id']
-      schema = schemas_table.find(id: id)
-      logger.info "found schema to delete: #{schema.attributes}"
-    rescue StandardError => e
-      status 400
-      json({ response: "could not handle request to remove schema: #{e.message}" })
-    else
-      begin
-        schemas_table.delete(id: schema.id)
-        file_path = "#{settings.schemas_dir_path}/#{schema.name}.avsc"
-        File.delete(file_path) if File.exist?(file_path)
-
-        logger.info("removed schema: #{schema.name}")
-
-        json({ response: schema.attributes })
-      rescue StandardError => e
-        status 500
-        json({ response: "could not handle request to remove schema: #{e.message}" })
-      end
-    end
-  end
-
-  post '/message' do
+  post '/record' do
     begin
       request_body = JSON.parse(request.body.read)
-      message = Models::Message.build_from(raw_model: request_body)
+      record = Models::Record.new(request_body)
     rescue StandardError => e
       status 400
       json({ response: "could not process request. error: #{e}" })
     else
-      payload = avro.encode(message.payload, schema_name: message.schema_name)
-      kafka.deliver_message(payload, topic: message.topic, key: message.key)
+      payload = avro.encode(JSON.parse(record.value), schema_id: record.schema_id)
+      response = kafka.deliver_message(payload, topic: record.topic, key: record.key)
 
-      json({ response: message.attributes })
+      json({ response: record.attributes })
     end
   end
 end
