@@ -57,7 +57,7 @@ class App < Sinatra::Application
       json({ response: "could not process request. error: #{e}" })
     else
       begin  
-        registered_schema_id = schema_registry.register(schema.subject, schema.content)
+        registered_schema_id = schema_registry.register(schema.subject, schema.schema)
         registered_schema = Models::RegisteredSchema.build_from(schema: schema, id: registered_schema_id)
         
         json({ response: registered_schema.attributes })
