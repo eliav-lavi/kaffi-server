@@ -13,6 +13,8 @@ require_relative 'models/subject_version'
 require_relative 'models/registered_schema'
 require_relative 'models/record'
 
+require_relative 'services/record_element_encoder'
+
 class App < Sinatra::Application
   configure :production, :development do
     enable :logging
@@ -38,6 +40,8 @@ class App < Sinatra::Application
   kafka = Kafka.new([settings.broker_host], client_id: settings.client_id)
   avro = AvroTurf::Messaging.new(registry_url: settings.schema_registry_host)
   schema_registry = AvroTurf::ConfluentSchemaRegistry.new(settings.schema_registry_host)
+
+  record_element_encoder = Services::RecordElementEncoder.new(avro: avro)
 
   get '/schema' do
     subjects = schema_registry.subjects
@@ -71,15 +75,22 @@ class App < Sinatra::Application
   post '/record' do
     begin
       request_body = JSON.parse(request.body.read)
-      record = Models::Record.new(request_body)
+      record = Models::Record.build_from(request_body)
     rescue StandardError => e
       status 400
       json({ response: "could not process request. error: #{e}" })
     else
-      payload = avro.encode(JSON.parse(record.value), schema_id: record.schema_id)
-      response = kafka.deliver_message(payload, topic: record.topic, key: record.key)
+      begin
+        produce_key = record_element_encoder.encode(record.key)
+        produce_value = record_element_encoder.encode(record.value)
 
-      json({ response: record.attributes })
+        response = kafka.deliver_message(produce_value, topic: record.topic, key: produce_key)
+
+        json({ response: record.attributes })
+      rescue StandardError => e
+        status 500
+        json({ response: "could not process request. error: #{e}" })     
+      end
     end
   end
 end
